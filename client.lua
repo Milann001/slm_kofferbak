@@ -1,12 +1,15 @@
 local inTrunk = false
 local currentVehicle = nil
 
--- Hulpfunctie: Check of voertuig klasse toegestaan is en of slot open is
+-- Hulpfunctie: Check of voertuig klasse toegestaan is en slot status
 local function canEnterTrunk(vehicle)
     local class = GetVehicleClass(vehicle)
     if not Config.AllowedClasses[class] then return false end
-    if GetVehicleDoorLockStatus(vehicle) > 1 then return false end -- Voertuig op slot
+    if GetVehicleDoorLockStatus(vehicle) > 1 then return false end
     
+    -- Check of er al iemand in de kofferbak ligt (State Bag)
+    if Entity(vehicle).state.trunkOccupied then return false end
+
     local bootBone = GetEntityBoneIndexByName(vehicle, 'boot')
     if bootBone == -1 then bootBone = GetEntityBoneIndexByName(vehicle, 'trunk') end
     
@@ -15,6 +18,8 @@ end
 
 -- Hulpfunctie: Check of het voertuig volledig leeg is
 local function isVehicleEmpty(vehicle)
+    if not DoesEntityExist(vehicle) then return false end
+    
     -- Check bestuurder
     if not IsVehicleSeatFree(vehicle, -1) then return false end
     
@@ -27,7 +32,6 @@ local function isVehicleEmpty(vehicle)
     return true
 end
 
--- Hulpfunctie: Bereken positie in/achter voertuig (voor camera focus)
 local function getTrunkOffset(vehicle)
     local model = GetEntityModel(vehicle)
     local min, max = GetModelDimensions(model)
@@ -35,31 +39,34 @@ local function getTrunkOffset(vehicle)
     return vector3(0.0, min.y + 0.4, zPos - 0.2)
 end
 
--- De loop die draait als de speler in de kofferbak ligt
+-- Reset de trunk status op het voertuig
+local function setTrunkOccupied(vehicle, occupied)
+    if DoesEntityExist(vehicle) then
+        -- true als 3e argument zorgt voor replicatie naar andere spelers
+        Entity(vehicle).state:set('trunkOccupied', occupied, true)
+    end
+end
+
 local function startTrunkLoop()
-    lib.showTextUI('E - Uit kofferbak', {position = "left-center"})
-    
-    -- Vertel ox_inventory dat de speler "bezig" is
+    lib.showTextUI('[E] - Uit kofferbak', {position = "left-center"})
     LocalPlayer.state:set('invBusy', true, true)
 
     CreateThread(function()
         while inTrunk do
-            -- Disable controls
             DisableAllControlActions(0)
-            EnableControlAction(0, 1, true) -- Muis Camera X
-            EnableControlAction(0, 2, true) -- Muis Camera Y
-            EnableControlAction(0, 245, true) -- Chat (T)
-            EnableControlAction(0, 38, true) -- E Key
+            EnableControlAction(0, 1, true)
+            EnableControlAction(0, 2, true)
+            EnableControlAction(0, 245, true)
+            EnableControlAction(0, 38, true)
 
-            -- Camera rotatie toestaan maar beperken
             SetGameplayCamRelativePitch(0.0, 1.0)
 
-            -- Veiligheidscheck: Als auto despawned of speler dood gaat
+            -- Veiligheidscheck
             if not DoesEntityExist(currentVehicle) or IsEntityDead(cache.ped) then
+                if currentVehicle then setTrunkOccupied(currentVehicle, false) end
                 inTrunk = false
                 LocalPlayer.state:set('invBusy', false, true)
                 
-                -- Reset zichtbaarheid en collision
                 DetachEntity(cache.ped, true, true)
                 SetEntityVisible(cache.ped, true, false)
                 SetEntityCollision(cache.ped, true, true)
@@ -68,14 +75,14 @@ local function startTrunkLoop()
                 ClearPedTasksImmediately(cache.ped)
             end
 
-            -- Uitstappen logica
-            if IsDisabledControlJustPressed(0, 38) then -- E key
+            -- Uitstappen
+            if IsDisabledControlJustPressed(0, 38) then
                 local speed = GetEntitySpeed(currentVehicle) * 3.6
                 
                 if speed > 1.0 then
-                    lib.notify({type = 'error', description = 'Voertuig rijdt te snel om eruit te gaan!'})
+                    lib.notify({type = 'error', description = 'Voertuig rijdt te snel!'})
                 else
-                    inTrunk = false -- Breek de loop
+                    inTrunk = false
                     
                     if lib.progressBar({
                         duration = Config.ActionDuration,
@@ -84,34 +91,27 @@ local function startTrunkLoop()
                         canCancel = false,
                         disable = { move = true, car = true, mouse = false, combat = true }
                     }) then
-                        -- 1. Kofferbak openen
                         SetVehicleDoorOpen(currentVehicle, 5, false, false)
                         Wait(500)
                         
-                        -- 2. Speler weer zichtbaar maken VOOR teleport
                         SetEntityVisible(cache.ped, true, false)
-                        
-                        -- 3. Positie bepalen
                         local model = GetEntityModel(currentVehicle)
                         local min, _ = GetModelDimensions(model)
                         
-                        -- 4. Speler losmaken
                         DetachEntity(cache.ped, true, true)
                         
-                        -- 5. Teleporteer speler VEILIG achter het voertuig
-                        -- min.y - 1.5 zorgt voor genoeg afstand van de bumper
+                        -- Veilig spawnen
                         local off = GetOffsetFromEntityInWorldCoords(currentVehicle, 0.0, min.y - 1.5, 0.0)
                         SetEntityCoords(cache.ped, off.x, off.y, off.z)
-                        
-                        -- 6. Forceer collision weer aan
                         SetEntityCollision(cache.ped, true, true)
                         
-                        -- 7. Reset status
+                        -- Status vrijgeven
+                        setTrunkOccupied(currentVehicle, false)
+                        
                         ClearPedTasks(cache.ped)
                         LocalPlayer.state:set('invBusy', false, true)
                         lib.hideTextUI()
                         
-                        -- 8. Kofferbak weer sluiten en cleanup
                         SetTimeout(1000, function()
                              if DoesEntityExist(currentVehicle) then
                                 SetVehicleDoorShut(currentVehicle, 5, false) 
@@ -119,7 +119,6 @@ local function startTrunkLoop()
                              currentVehicle = nil
                         end)
                     else
-                        -- Als progress geannuleerd zou worden
                         inTrunk = true
                         startTrunkLoop()
                     end
@@ -130,20 +129,25 @@ local function startTrunkLoop()
     end)
 end
 
--- De functie om de kofferbak in te gaan
 local function enterTrunk(entity)
     if inTrunk then return end
     
-    -- Check of het voertuig leeg is (NIEUW)
+    -- Check 1: Is voertuig leeg bij start?
     if not isVehicleEmpty(entity) then
-        lib.notify({type = 'error', description = 'Je kan pas in de kofferbak liggen als er niemand meer in het voertuig zit!'})
+        lib.notify({type = 'error', description = 'Voertuig is niet leeg!'})
         return
     end
 
-    -- Kofferbak openen VOOR de animatie start
+    -- Check 2: Zit er al iemand in de kofferbak?
+    if Entity(entity).state.trunkOccupied then
+        lib.notify({type = 'error', description = 'Kofferbak is al bezet!'})
+        return
+    end
+
     SetVehicleDoorOpen(entity, 5, false, false)
 
-    if lib.progressBar({
+    -- Progressbar met "tick" functie voor continue controle
+    local success = lib.progressBar({
         duration = Config.ActionDuration,
         label = 'In kofferbak kruipen...',
         useWhileDead = false,
@@ -152,28 +156,41 @@ local function enterTrunk(entity)
         anim = {
             dict = 'anim@amb@clubhouse@tutorial@bkr_tut_ig3@',
             clip = 'machinic_loop_mechandplayer' 
-        }
-    }) then
-        -- Succesvol
+        },
+        -- Deze functie runt elke frame tijdens de progressbar
+        tick = function()
+            -- Als het voertuig NIET meer leeg is, cancel de actie direct
+            if not isVehicleEmpty(entity) then
+                return false -- Dit stopt de progressbar (geeft 'cancel' terug)
+            end
+            return true
+        end
+    })
+
+    if success then
+        -- Dubbelcheck state voor de zekerheid (race conditions)
+        if Entity(entity).state.trunkOccupied then
+            lib.notify({type = 'error', description = 'Kofferbak is net bezet!'})
+            SetVehicleDoorShut(entity, 5, false)
+            return
+        end
+
         inTrunk = true
         currentVehicle = entity
         
-        -- Animatie laden
+        -- Markeer kofferbak als bezet
+        setTrunkOccupied(entity, true)
+        
         local dict = 'timetable@floyd@cryingonbed@base'
         lib.requestAnimDict(dict)
         
-        -- Attach Logic
         local offset = Config.CustomOffsets[GetEntityModel(entity)] or getTrunkOffset(entity)
         AttachEntityToEntity(cache.ped, entity, 0, offset.x, offset.y, offset.z, 0.0, 0.0, 0.0, false, false, false, false, 20, true)
         
-        -- Speel lig animatie (voor hitbox bepaling, ook al ben je onzichtbaar)
         TaskPlayAnim(cache.ped, dict, 'base', 8.0, -8.0, -1, 1, 0, false, false, false)
         
-        -- MAAK ONZICHTBAAR (NIEUW)
-        -- Dit zorgt ervoor dat je niet door de bumper heen clipt
         SetEntityVisible(cache.ped, false, false)
 
-        -- Kofferbak SLUITEN na korte vertraging
         SetTimeout(800, function()
             if inTrunk and DoesEntityExist(entity) then
                 SetVehicleDoorShut(entity, 5, false)
@@ -182,21 +199,24 @@ local function enterTrunk(entity)
         
         startTrunkLoop()
     else
-        -- Geannuleerd? Doe de klep weer dicht
+        -- Geannuleerd (door speler of door tick check)
         SetVehicleDoorShut(entity, 5, false)
-        lib.notify({type = 'inform', description = 'Geannuleerd'})
+        if not isVehicleEmpty(entity) then
+            lib.notify({type = 'error', description = 'Actie geannuleerd: Iemand stapte in!'})
+        else
+            lib.notify({type = 'inform', description = 'Geannuleerd'})
+        end
     end
 end
 
--- Initialiseer ox_target
 exports.ox_target:addGlobalVehicle({
     {
         label = 'In kofferbak liggen',
         icon = 'fa-solid fa-car-rear',
         distance = 2.5,
         canInteract = function(entity)
-            -- Checkt nu ook of de auto leeg is in de interactie check (optioneel, maar netjes)
-            return not inTrunk and canEnterTrunk(entity)
+            -- Check of kofferbak vrij is in het menu
+            return not inTrunk and canEnterTrunk(entity) and not Entity(entity).state.trunkOccupied
         end,
         onSelect = function(data)
             enterTrunk(data.entity)
