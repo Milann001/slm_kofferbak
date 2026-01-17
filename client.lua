@@ -40,7 +40,7 @@ end
 
 -- De loop die draait als de speler in de kofferbak ligt
 local function startTrunkLoop(netId)
-    lib.showTextUI('[E] - Uit kofferbak', {position = "left-center"})
+    lib.showTextUI('E - Uit kofferbak', {position = "left-center"})
     LocalPlayer.state:set('invBusy', true, true)
 
     CreateThread(function()
