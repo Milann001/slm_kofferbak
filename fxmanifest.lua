@@ -3,8 +3,8 @@ game 'gta5'
 lua54 'yes'
 
 author 'Milan'
-description 'Kofferbak systeem met ox_target en ox_lib'
-version '1.0.0'
+description 'Advanced Trunk System'
+version '1.2.0'
 
 shared_scripts {
     '@ox_lib/init.lua',
@@ -13,6 +13,10 @@ shared_scripts {
 
 client_scripts {
     'client.lua'
+}
+
+server_scripts {
+    'server.lua'
 }
 
 dependencies {
